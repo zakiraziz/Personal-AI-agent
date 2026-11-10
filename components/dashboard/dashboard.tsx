@@ -13,6 +13,7 @@ import { QuickActions } from "@/components/dashboard/quick-actions";
 import { ComingSoonDialog } from "@/components/ui/coming-soon-dialog";
 import { StoryStudio } from "@/components/story-studio/story-studio";
 import { CharacterStudio } from "@/components/character-studio/character-studio";
+import { VideoStudio } from "@/components/video-studio/video-studio";
 import type { CharacterProfile } from "@/lib/character-studio/types";
 import type { SavedStory } from "@/lib/story-studio/service";
 import type { YouTubeChannelRow } from "@/lib/supabase/database.types";
@@ -143,6 +144,8 @@ export function Dashboard({
             <CharacterStudio initialCharacters={characters} />
           ) : activePage === "Thumbnail Studio" ? (
             <ThumbnailStudio onPromptGenerated={() => setComingSoonTitle(null)} />
+          ) : activePage === "Video Studio" ? (
+            <VideoStudio onUploadComplete={() => setComingSoonTitle(null)} />
           ) : (
             <ComingSoon page={activePage} />
           )}

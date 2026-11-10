@@ -99,7 +99,27 @@ export function ThumbnailStudio({ onPromptGenerated }: ThumbnailStudioProps) {
         </button>
       </form>
 
-      {prompt && !isGenerating && (
+      {imageUrl && (
+        <div className="mt-6">
+          <img
+            src={imageUrl}
+            alt="Generated thumbnail"
+            className="w-full h-auto rounded-lg border border-white/[0.08] mb-4"
+          />
+          <p className="text-sm text-slate-300">
+            Generated with DALL-E 3{" "}<a
+              href={imageUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline text-violet-300 hover:text-violet-200"
+            >
+              Open in new tab
+            </a>
+          </p>
+        </div>
+      )}
+
+      {prompt && !isGenerating && (!imageUrl) && (
         <div className="mt-6 p-4 bg-violet-500/10 border border-violet-500/20 rounded-xl">
           <h3 className="font-medium text-slate-100 mb-2">Generated Prompt:</h3>
           <p className="font-mono text-sm text-violet-200 break-all whitespace-pre-wrap">{prompt}</p>

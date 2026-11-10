@@ -1,0 +1,5 @@
+{
+  "cron": {
+    "/api/auto-pilot/daily": "0 9 * * *"
+  }
+}

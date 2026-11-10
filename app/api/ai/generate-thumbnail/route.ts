@@ -1,52 +1,49 @@
 import "server-only";
-import { GoogleGenAI, Type } from "@google/genai";
-import { NextResponse } from "next/server";
-import { GEMINI_MODEL, retryGeminiGeneration } from "@/lib/ai/gemini";
-import { isAuthorizedEmail } from "@/lib/supabase/config";
-import { createClient } from "@/lib/supabase/server";
+import { Configuration, OpenAIApi } from "openai";
 
-const maximumBodyLength = 2000;
+const configuration = new Configuration({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+const openai = new OpenAIApi(configuration);
 
-const thumbnailSystemInstruction = [
-  "You are an AI prompt engineer specialized in creating highly detailed, descriptive",
-  "image prompts for cartoon-style thumbnail generation.",
-  "Create a prompt that describes a complete scene with:",
-  "- Main subject(s) and their appearance",
-  "- Setting/background environment",
-  "- Action or pose",
-  "- Lighting and mood",
-  "- Color palette",
-  "- Art style (cartoon, vibrant, expressive)",
-  "The prompt should be detailed enough to generate a high-quality thumbnail image",
-  "but concise enough for the AI image generator.",
-].join(" ");
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
 
-function jsonError(message: string, status: number) {
-  return NextResponse.json({ error: message }, { status });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-export async function POST(request: Request) {
-  let rawBody: string;
+export async function POST(request: NextRequest) {
   try {
-    rawBody = await request.text();
-  } catch {
-    return jsonError("Could not read the thumbnail request.", 400);
-  }
+    const { prompt } = await request.json();
 
-  if (rawBody.length > maximumBodyLength) {
-    return jsonError("The thumbnail request is too large.", 413);
-  }
+    if (!prompt) {
+      return new Response(JSON.stringify({ error: "Prompt is required" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
 
-  let body: unknown;
-  try {
-    body = JSON.parse(rawBody);
-  } catch {
-    return jsonError("The thumbnail request must contain valid JSON.", 400);
+    const response = await openai.createImage({
+      prompt: prompt,
+      model: "dall-e-3",
+      size: "1024x1024",
+      quality: "standard",
+    });
+
+    const imageUrl = response.data.data[0].url;
+
+    return new Response(JSON.stringify({ imageUrl }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  } catch (error) {
+    console.error("DALL-E generation error:", error);
+    return new Response(JSON.stringify({ error: "Failed to generate thumbnail" }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
   }
+}
 
   if (!isRecord(body)) {
     return jsonError("Enter a valid story title or topic.", 400);
