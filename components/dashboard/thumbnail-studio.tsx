@@ -10,6 +10,7 @@ type ThumbnailStudioProps = {
 export function ThumbnailStudio({ onPromptGenerated }: ThumbnailStudioProps) {
   const [topic, setTopic] = useState("");
   const [prompt, setPrompt] = useState<string | null>(null);
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submitRef = useRef<HTMLFormElement>(null);

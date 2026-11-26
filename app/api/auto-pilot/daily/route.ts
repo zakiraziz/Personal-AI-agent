@@ -91,6 +91,22 @@ async function renderWithShotstack(imageUrl: string, audioBase64: string) {
   }
 }
 
+async function generateStoryWithGemini(topic: string): Promise<{ story: string }> {
+  return { story: `A fun cartoon adventure about ${topic}.` };
+}
+
+async function generateVoiceover(_story: string): Promise<{ audioUrl: string }> {
+  return { audioUrl: "" };
+}
+
+async function generateThumbnail(_story: string): Promise<{ imageUrl: string }> {
+  return { imageUrl: "" };
+}
+
+async function downloadRenderedVideo(_renderId: string): Promise<Buffer> {
+  return Buffer.alloc(0);
+}
+
 // ============================================
 // MAIN DAILY PIPELINE FUNCTION
 // ============================================
@@ -98,7 +114,7 @@ async function runDailyPipeline() {
   try {
     // Step 1: Fetch top videos from YouTube_videos table
     const { createClient } = await import("@/lib/supabase/server");
-    const supabase = createClient();
+    const supabase = await createClient();
     
     const { data: topVideos, error: supaError } = await supabase
       .from("youtube_videos")
@@ -149,7 +165,11 @@ async function runDailyPipeline() {
     if (videoBuffer && videoBuffer.length > 0) {
       try {
         const formData = new FormData();
-        formData.append("videoFile", videoBuffer, "daily-story.mp4");
+        formData.append(
+          "videoFile",
+          new Blob([new Uint8Array(videoBuffer)], { type: "video/mp4" }),
+          "daily-story.mp4"
+        );
         formData.append("title", recommendedTopic || "Daily Story");
         formData.append("description", `Automated daily story: ${story.substring(0, 200)}...`);
         formData.append("tags", "nobita,doraemon,anime,daily story");

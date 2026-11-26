@@ -1,49 +1,26 @@
 import "server-only";
-import { Configuration, OpenAIApi } from "openai";
+import { GoogleGenAI } from "@google/genai";
+import { NextResponse, type NextRequest } from "next/server";
+import { GEMINI_MODEL, retryGeminiGeneration } from "@/lib/ai/gemini";
+import { createClient } from "@/lib/supabase/server";
 
-const configuration = new Configuration({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-const openai = new OpenAIApi(configuration);
+const thumbnailSystemInstruction = `You are an expert at writing detailed image generation prompts for cartoon-style YouTube thumbnails.
+Create vivid, descriptive prompts that will produce eye-catching thumbnails with:
+- Bold, vibrant colors
+- Expressive cartoon characters
+- Clear visual hierarchy
+- Engaging composition`;
 
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function jsonError(message: string, status: number) {
+  return NextResponse.json({ error: message }, { status });
+}
 
 export async function POST(request: NextRequest) {
-  try {
-    const { prompt } = await request.json();
-
-    if (!prompt) {
-      return new Response(JSON.stringify({ error: "Prompt is required" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
-    const response = await openai.createImage({
-      prompt: prompt,
-      model: "dall-e-3",
-      size: "1024x1024",
-      quality: "standard",
-    });
-
-    const imageUrl = response.data.data[0].url;
-
-    return new Response(JSON.stringify({ imageUrl }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-  } catch (error) {
-    console.error("DALL-E generation error:", error);
-    return new Response(JSON.stringify({ error: "Failed to generate thumbnail" }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-}
+  const body = await request.json().catch(() => null);
 
   if (!isRecord(body)) {
     return jsonError("Enter a valid story title or topic.", 400);
@@ -61,7 +38,7 @@ export async function POST(request: NextRequest) {
 
   // Use the retry logic for Gemini API calls
   const generatePrompt = async (): Promise<string> => {
-    const client = new GoogleGenAI();
+    const client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
     const response = await client.models.generateContent({
       model: GEMINI_MODEL,

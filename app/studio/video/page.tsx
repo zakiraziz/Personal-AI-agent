@@ -144,7 +144,7 @@ export default function VideoStudioPage() {
       </form>
 
       {message && (
-        <p className="mt-4 text-center {message.startsWith("Video uploaded") ? "text-green-600" : "text-red-600"}">
+        <p className={`mt-4 text-center ${message.startsWith("Video uploaded") ? "text-green-600" : "text-red-600"}`}>
           {message}
         </p>
       )}

@@ -1,10 +1,6 @@
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
+export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
   try {

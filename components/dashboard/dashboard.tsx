@@ -145,7 +145,7 @@ export function Dashboard({
           ) : activePage === "Thumbnail Studio" ? (
             <ThumbnailStudio onPromptGenerated={() => setComingSoonTitle(null)} />
           ) : activePage === "Video Studio" ? (
-            <VideoStudio onUploadComplete={() => setComingSoonTitle(null)} />
+            <VideoStudio />
           ) : (
             <ComingSoon page={activePage} />
           )}
