@@ -24,7 +24,7 @@ export async function POST(req: Request) {
     }
 
     // 2. Get the refresh token from the database
-    const { data: tokenData, error: tokenError } = await supabase
+    const { data: tokenData, error: tokenError } = await (supabase as any)
       .from("youtube_oauth_tokens")
       .select("refresh_token")
       .eq("user_id", user.id)
