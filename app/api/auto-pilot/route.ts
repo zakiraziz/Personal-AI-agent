@@ -1,96 +1,120 @@
-import "server-only";
 import { NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+import { decryptRefreshToken } from "@/lib/youtube/oauth";
+import { OAuth2Client } from "google-auth-library";
 
-// Step 1: Generate Story using existing Gemini logic
-async function generateStory(prompt: string) {
-  const res = await fetch("/api/ai/generate-story", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ prompt }),
-  });
-
-  if (!res.ok) {
-    const errorData = await res.json();
-    throw new Error(`Story generation failed: ${errorData.error || "Unknown error"}`);
-  }
-
-  const data = await res.json();
-  // The story route returns a story object, extract the text/narrative
-  // We need to get a usable text representation
-  return data.story || data.introduction || "Generated story content";
-}
-
-// Step 2: Generate Voiceover using ElevenLabs
-async function generateVoiceover(storyText: string) {
-  const res = await fetch("/api/ai/generate-voice", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ text: storyText }),
-  });
-
-  if (!res.ok) {
-    const errorData = await res.json();
-    throw new Error(`Voiceover generation failed: ${errorData.error || "Unknown error"}`);
-  }
-
-  const data = await res.json();
-  return data.audioUrl || "";
-}
-
-// Step 3: Generate Thumbnail using DALL-E 3
-async function generateThumbnail(storyText: string) {
-  const res = await fetch("/api/ai/generate-thumbnail", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ prompt: storyText }),
-  });
-
-  if (!res.ok) {
-    const errorData = await res.json();
-    throw new Error(`Thumbnail generation failed: ${errorData.error || "Unknown error"}`);
-  }
-
-  const data = await res.json();
-  return data.imageUrl || "";
-}
-
-export async function POST(request: Request) {
+export async function POST(req: Request) {
   try {
-    const { prompt } = await request.json();
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
 
-    if (!prompt) {
-      return NextResponse.json(
-        { error: "Prompt is required" },
-        { status: 400 }
-      );
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Step 1: Generate Story (Gemini)
-    setTimeout(() => {}, 0); // Yield control
-    const story = await generateStory(prompt);
+    // 1. Get the form data
+    const formData = await req.formData();
+    const videoFile = formData.get("videoFile") as File;
+    const title = formData.get("title") as string;
+    const description = formData.get("description") as string;
+    const privacyStatus = formData.get("privacyStatus") as string || "private";
 
-    // Step 2: Generate Voiceover using the generated story text
-    const audioUrl = await generateVoiceover(story);
+    if (!videoFile || !title) {
+      return NextResponse.json({ error: "Missing video file or title" }, { status: 400 });
+    }
 
-    // Step 3: Generate Thumbnail using the story text
-    const thumbnailUrl = await generateThumbnail(story);
+    // 2. Get the refresh token from the database
+    const { data: tokenData, error: tokenError } = await supabase
+      .from("youtube_oauth_tokens")
+      .select("refresh_token")
+      .eq("user_id", user.id)
+      .single();
 
-    return NextResponse.json({
-      story,
-      audioUrl,
-      thumbnailUrl,
-    });
-  } catch (error: any) {
-    console.error("Auto-pilot error:", error);
-    return NextResponse.json(
-      { error: error.message || "Auto-pilot failed" },
-      { status: 500 }
+    if (tokenError || !tokenData) {
+      return NextResponse.json({ error: "YouTube account not connected" }, { status: 400 });
+    }
+
+    // 3. Decrypt the token and get a fresh access token
+    const refreshToken = decryptRefreshToken(tokenData.refresh_token);
+    
+    const oauth2Client = new OAuth2Client(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET
     );
+    oauth2Client.setCredentials({ refresh_token: refreshToken });
+    
+    const { token: accessToken } = await oauth2Client.getAccessToken();
+
+    if (!accessToken) {
+      return NextResponse.json({ error: "Failed to refresh access token" }, { status: 401 });
+    }
+
+    // 4. Prepare the metadata for YouTube
+    const metadata = {
+      snippet: {
+        title: title,
+        description: description,
+        categoryId: "22", // 22 is "People & Blogs", you can change this
+      },
+      status: {
+        privacyStatus: privacyStatus,
+        selfDeclaredMadeForKids: false,
+      },
+    };
+
+    // 5. Upload the video using Google's resumable upload API
+    const fileBuffer = Buffer.from(await videoFile.arrayBuffer());
+    
+    // First, initiate the upload
+    const initRes = await fetch("https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        "X-Upload-Content-Length": fileBuffer.length.toString(),
+        "X-Upload-Content-Type": videoFile.type || "video/mp4",
+      },
+      body: JSON.stringify(metadata),
+    });
+
+    if (!initRes.ok) {
+      const errorData = await initRes.text();
+      console.error("YouTube API init error:", errorData);
+      return NextResponse.json({ error: "Failed to initiate upload" }, { status: 500 });
+    }
+
+    // Get the upload URL from the 'Location' header
+    const uploadUrl = initRes.headers.get("Location");
+    if (!uploadUrl) {
+      return NextResponse.json({ error: "Missing upload URL" }, { status: 500 });
+    }
+
+    // Second, upload the actual file
+    const uploadRes = await fetch(uploadUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Type": videoFile.type || "video/mp4",
+        "Content-Length": fileBuffer.length.toString(),
+      },
+      body: fileBuffer,
+    });
+
+    if (!uploadRes.ok) {
+      const errorData = await uploadRes.text();
+      console.error("YouTube API upload error:", errorData);
+      return NextResponse.json({ error: "Failed to upload video" }, { status: 500 });
+    }
+
+    const result = await uploadRes.json();
+    
+    return NextResponse.json({ 
+      success: true, 
+      videoId: result.id,
+      url: `https://youtu.be/${result.id}`
+    });
+
+  } catch (error: any) {
+    console.error("Upload route error:", error);
+    return NextResponse.json({ error: error.message || "Failed to upload video" }, { status: 500 });
   }
 }
