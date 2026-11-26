@@ -1,5 +1,8 @@
 {
-  "cron": {
-    "/api/auto-pilot/daily": "0 9 * * *"
-  }
+  "crons": [
+    {
+      "path": "/api/auto-pilot/daily?token=daily_autopilot_secret_2024",
+      "schedule": "0 9 * * *"
+    }
+  ]
 }
