@@ -1,111 +1,120 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { decryptRefreshToken } from "@/lib/youtube/oauth";
-import { google } from "googleapis";
+import { OAuth2Client } from "google-auth-library";
 
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
-
-export async function POST(request: NextRequest) {
+export async function POST(req: Request) {
   try {
     const supabase = await createClient();
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser();
+    const { data: { user } } = await supabase.auth.getUser();
 
-    if (authError || !user) {
+    if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    if (!isAuthorizedEmail(user.email)) {
-      return NextResponse.json({ error: "Not authorized" }, { status: 403 });
-    }
-
-    // Parse FormData
-    const formData = await request.formData();
-    const videoFile = formData.get("videoFile") as File | null;
-    const title = formData.get("title") as string | null;
-    const description = formData.get("description") as string | null;
-    const tagsString = formData.get("tags") as string | null;
-    const privacyStatus = formData.get("privacyStatus") as string | null || "private";
+    // 1. Get the form data
+    const formData = await req.formData();
+    const videoFile = formData.get("videoFile") as File;
+    const title = formData.get("title") as string;
+    const description = formData.get("description") as string;
+    const privacyStatus = formData.get("privacyStatus") as string || "private";
 
     if (!videoFile || !title) {
-      return NextResponse.json(
-        { error: "Missing required fields (videoFile, title)" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Missing video file or title" }, { status: 400 });
     }
 
-    // Decrypt stored refresh token
-    const { data: tokenRow, error: tokenError } = await supabase
+    // 2. Get the refresh token from the database
+    const { data: tokenData, error: tokenError } = await supabase
       .from("youtube_oauth_tokens")
-      .select("refresh_token_ciphertext")
-      .eq("owner_id", user.id)
+      .select("refresh_token")
+      .eq("user_id", user.id)
       .single();
 
-    if (tokenError || !tokenRow?.refresh_token_ciphertext) {
-      return NextResponse.json(
-        { error: "YouTube not connected. Please use /api/youtube/connect first." },
-        { status: 400 }
-      );
+    if (tokenError || !tokenData) {
+      return NextResponse.json({ error: "YouTube account not connected" }, { status: 400 });
     }
 
-    const refreshToken = decryptRefreshToken(tokenRow.refresh_token_ciphertext);
+    // 3. Decrypt the token and get a fresh access token
+    const refreshToken = decryptRefreshToken(tokenData.refresh_token);
+    
+    const oauth2Client = new OAuth2Client(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET
+    );
+    oauth2Client.setCredentials({ refresh_token: refreshToken });
+    
+    const { token: accessToken } = await oauth2Client.getAccessToken();
 
-    // Build OAuth2 client with refresh token
-    const oauth2Client = new google.auth.OAuth2();
-    oauth2Client.setCredentials({
-      refresh_token: refreshToken,
-    });
+    if (!accessToken) {
+      return NextResponse.json({ error: "Failed to refresh access token" }, { status: 401 });
+    }
 
-    // Convert uploaded file to Buffer
-    const arrayBuffer = await videoFile.arrayBuffer();
-    const videoBuffer = Buffer.from(arrayBuffer);
-
-    // Prepare tags array if provided
-    const tags = tagsString
-      ? tagsString.split(",").map((t: string) => t.trim()).filter(Boolean)
-      : [];
-
-    // YouTube Videos.insert
-    const youtube = google.youtube({
-      version: "v3",
-      auth: oauth2Client,
-    });
-
-    const response = await youtube.videos.insert({
-      part: "snippet,status",
-      requestBody: {
-        snippet: {
-          title,
-          description: description || "",
-          tags,
-        },
-        status: {
-          privacyStatus: privacyStatus as "public" | "unlisted" | "private",
-        },
+    // 4. Prepare the metadata for YouTube
+    const metadata = {
+      snippet: {
+        title: title,
+        description: description,
+        categoryId: "22", // 22 is "People & Blogs", you can change this
       },
-      media: {
-        body: videoBuffer,
+      status: {
+        privacyStatus: privacyStatus,
+        selfDeclaredMadeForKids: false,
       },
+    };
+
+    // 5. Upload the video using Google's resumable upload API
+    const fileBuffer = Buffer.from(await videoFile.arrayBuffer());
+    
+    // First, initiate the upload
+    const initRes = await fetch("https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        "X-Upload-Content-Length": fileBuffer.length.toString(),
+        "X-Upload-Content-Type": videoFile.type || "video/mp4",
+      },
+      body: JSON.stringify(metadata),
     });
 
-    const videoId = response.data.id;
-    const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    if (!initRes.ok) {
+      const errorData = await initRes.text();
+      console.error("YouTube API init error:", errorData);
+      return NextResponse.json({ error: "Failed to initiate upload" }, { status: 500 });
+    }
 
-    return NextResponse.json({
-      success: true,
-      videoId,
-      url: watchUrl,
+    // Get the upload URL from the 'Location' header
+    const uploadUrl = initRes.headers.get("Location");
+    if (!uploadUrl) {
+      return NextResponse.json({ error: "Missing upload URL" }, { status: 500 });
+    }
+
+    // Second, upload the actual file
+    const uploadRes = await fetch(uploadUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Type": videoFile.type || "video/mp4",
+        "Content-Length": fileBuffer.length.toString(),
+      },
+      body: fileBuffer,
     });
+
+    if (!uploadRes.ok) {
+      const errorData = await uploadRes.text();
+      console.error("YouTube API upload error:", errorData);
+      return NextResponse.json({ error: "Failed to upload video" }, { status: 500 });
+    }
+
+    const result = await uploadRes.json();
+    
+    return NextResponse.json({ 
+      success: true, 
+      videoId: result.id,
+      url: `https://youtu.be/${result.id}`
+    });
+
   } catch (error: any) {
-    console.error("YouTube upload failed.", error);
-    const message =
-      error?.response?.data?.error?.message || error?.message || "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error("Upload route error:", error);
+    return NextResponse.json({ error: error.message || "Failed to upload video" }, { status: 500 });
   }
 }
